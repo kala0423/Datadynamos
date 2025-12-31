@@ -1,0 +1,5 @@
+{
+  "name": "Copy of SecureWiper Web - Data Erasure Certificate Generator",
+  "description": "A high-security web application for simulating NIST-compliant data destruction and generating formal erasure certificates with QR verification and digital signatures.",
+  "requestFramePermissions": []
+}
