@@ -1,3 +1,5 @@
 streamlit
 cryptography
 reportlab
+pandas
+qrcode
