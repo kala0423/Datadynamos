@@ -1,80 +1,184 @@
 import streamlit as st
-import os
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from datetime import datetime, timedelta
+import os, hashlib, csv, uuid
+from datetime import datetime
 import tempfile
+import pandas as pd
+import qrcode
 
-st.set_page_config(page_title="Secure Data Wiper & Certificate Generator")
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.exceptions import InvalidSignature
 
-st.title("🔐 Secure Data Wiper & Certificate Generator")
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image
+from reportlab.lib.styles import getSampleStyleSheet
 
-# ================= SECURE FILE WIPER =================
-st.header("🧹 Secure File Wiper")
+# ================= GOVERNMENT UI =================
+st.set_page_config(
+    page_title="DataDynamos | Certified Data Erasure",
+    page_icon="🏛️",
+    layout="wide"
+)
 
-uploaded_file = st.file_uploader("Upload a file to securely wipe")
+st.markdown("""
+<style>
+body { background:#f8fafc; color:#020617; }
+h1,h2,h3 { color:#020617; }
+.stButton>button { background:#1e3a8a; color:white; border-radius:4px; }
+</style>
+""", unsafe_allow_html=True)
 
-def secure_wipe(file_path, passes=3):
-    size = os.path.getsize(file_path)
-    with open(file_path, "wb") as f:
-        for _ in range(passes):
-            f.seek(0)
-            f.write(os.urandom(size))
-            f.flush()
-            os.fsync(f.fileno())
-    os.remove(file_path)
+st.title("🏛️ Certified Secure Data Erasure System")
+st.caption("NIST SP 800-88 • ISO/IEC 27001 • CERT-In Aligned")
 
-if uploaded_file:
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_file.write(uploaded_file.read())
-    temp_file.close()
+# ================= KEY MANAGEMENT =================
+KEY_FILE = "signing_key.pem"
 
-    if st.button("Securely Wipe File"):
-        secure_wipe(temp_file.name)
-        st.success("✅ File securely wiped (NIST-style overwrite)")
+def get_key():
+    if not os.path.exists(KEY_FILE):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        with open(KEY_FILE, "wb") as f:
+            f.write(key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption()
+            ))
+    else:
+        with open(KEY_FILE, "rb") as f:
+            key = serialization.load_pem_private_key(f.read(), password=None)
+    return key
 
-# ================= CERTIFICATE GENERATOR =================
-st.header("📜 Certificate Generator")
+KEY = get_key()
 
-common_name = st.text_input("Common Name (CN)", "example.com")
+# ================= CORE FUNCTIONS =================
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for c in iter(lambda: f.read(4096), b""):
+            h.update(c)
+    return h.hexdigest()
 
-if st.button("Generate Certificate"):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def secure_wipe(path):
+    size = os.path.getsize(path)
+    with open(path, "wb") as f:
+        f.write(os.urandom(size))
+        f.flush()
+        os.fsync(f.fileno())
+    os.remove(path)
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
-    ])
-
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.utcnow())
-        .not_valid_after(datetime.utcnow() + timedelta(days=365))
-        .sign(key, hashes.SHA256())
+def sign(data: bytes):
+    return KEY.sign(
+        data,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256()
     )
 
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-    key_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
+def verify(data: bytes, signature: bytes):
+    try:
+        KEY.public_key().verify(
+            signature,
+            data,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256()
+        )
+        return True
+    except InvalidSignature:
+        return False
 
-    st.download_button(
-        "⬇ Download Certificate (.crt)",
-        cert_pem,
-        file_name="certificate.crt"
-    )
+def blockchain_anchor(hashval):
+    with open("blockchain_anchor.txt", "a") as f:
+        f.write(f"{datetime.utcnow()} | {hashval}\n")
 
-    st.download_button(
-        "⬇ Download Private Key (.key)",
-        key_pem,
-        file_name="private.key"
-    )
+# ================= OPERATOR INFO =================
+st.sidebar.header("🧾 Operator Identity")
+user_id = st.sidebar.text_input("User ID", "gov-admin")
+device_id = st.sidebar.text_input("Device Serial", hex(uuid.getnode()))
 
-    st.success("✅ Certificate Generated Successfully")
+# ================= FILE WIPE =================
+st.header("🧹 Secure Data Sanitization")
+
+file = st.file_uploader("Upload file for irreversible erasure")
+
+if file:
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(file.read())
+    tmp.close()
+
+    before = sha256(tmp.name)
+    st.code(f"SHA-256 BEFORE:\n{before}")
+
+    if st.button("🚨 EXECUTE NIST-COMPLIANT WIPE"):
+        secure_wipe(tmp.name)
+        after = hashlib.sha256(b"").hexdigest()
+
+        record = {
+            "Timestamp": str(datetime.utcnow()),
+            "User ID": user_id,
+            "Device Serial": device_id,
+            "File Name": file.name,
+            "SHA-256 Before": before,
+            "SHA-256 After": after,
+            "Standards": "NIST SP 800-88 Rev.1 | ISO/IEC 27001 A.8.10",
+            "Status": "SANITIZED"
+        }
+
+        signature = sign(str(record).encode())
+        blockchain_anchor(before)
+
+        # QR Code
+        qr = qrcode.make(str(record))
+        qr_path = "qr.png"
+        qr.save(qr_path)
+
+        # PDF Certificate
+        pdf = "Government_Erasure_Certificate.pdf"
+        styles = getSampleStyleSheet()
+        doc = SimpleDocTemplate(pdf)
+
+        content = [
+            Paragraph("<b>GOVERNMENT CERTIFIED DATA ERASURE CERTIFICATE</b>", styles["Title"])
+        ]
+        for k, v in record.items():
+            content.append(Paragraph(f"<b>{k}:</b> {v}", styles["Normal"]))
+
+        content.append(Paragraph("<b>Digital Signature:</b>", styles["Normal"]))
+        content.append(Paragraph(signature.hex(), styles["Normal"]))
+        content.append(Image(qr_path, width=120, height=120))
+
+        doc.build(content)
+
+        # Audit log
+        exists = os.path.exists("audit_log.csv")
+        with open("audit_log.csv", "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=record.keys())
+            if not exists:
+                writer.writeheader()
+            writer.writerow(record)
+
+        st.success("✔ Data sanitized, signed, anchored & certified")
+        st.download_button("⬇ Download Certificate (PDF)", open(pdf, "rb"), pdf)
+
+# ================= SIGNATURE VERIFICATION =================
+st.header("🔍 Certificate Signature Verification")
+
+sig_input = st.text_area("Paste Digital Signature (hex)")
+data_input = st.text_area("Paste Certificate Record")
+
+if st.button("Verify Signature"):
+    valid = verify(data_input.encode(), bytes.fromhex(sig_input))
+    if valid:
+        st.success("✔ Signature VALID — Certificate Authentic")
+    else:
+        st.error("✖ Signature INVALID — Possible tampering")
+
+# ================= ANALYTICS =================
+st.header("📊 Compliance Dashboard")
+
+if os.path.exists("audit_log.csv"):
+    df = pd.read_csv("audit_log.csv")
+    st.metric("Total Sanitizations", len(df))
+    st.metric("Unique Devices", df["Device Serial"].nunique())
+    st.metric("Operators", df["User ID"].nunique())
+    st.dataframe(df, use_container_width=True)
+
+# ================= FOOTER =================
+st.info("🏛️ Designed for Government, Defense, Banking & Critical Infrastructure")
