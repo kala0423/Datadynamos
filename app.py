@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify, send_file
-import os, random
+import streamlit as st
+import os
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -7,46 +7,42 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from datetime import datetime, timedelta
 import tempfile
 
-app = Flask(__name__)
+st.set_page_config(page_title="Secure Data Wiper & Certificate Generator")
 
-# ========================= Secure File Wiper =========================
-def secure_wipe(path, passes=3):
-    if not os.path.isfile(path):
-        return False
+st.title("🔐 Secure Data Wiper & Certificate Generator")
 
-    length = os.path.getsize(path)
-    with open(path, "wb") as f:
+# ================= SECURE FILE WIPER =================
+st.header("🧹 Secure File Wiper")
+
+uploaded_file = st.file_uploader("Upload a file to securely wipe")
+
+def secure_wipe(file_path, passes=3):
+    size = os.path.getsize(file_path)
+    with open(file_path, "wb") as f:
         for _ in range(passes):
             f.seek(0)
-            f.write(os.urandom(length))
+            f.write(os.urandom(size))
             f.flush()
             os.fsync(f.fileno())
-    os.remove(path)
-    return True
+    os.remove(file_path)
 
-@app.route('/wipe', methods=['POST'])
-def wipe():
-    data = request.json
-    file_path = data.get("path")
+if uploaded_file:
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file.write(uploaded_file.read())
+    temp_file.close()
 
-    if not file_path or not os.path.exists(file_path):
-        return jsonify({"status": "error", "msg": "File not found"}), 404
+    if st.button("Securely Wipe File"):
+        secure_wipe(temp_file.name)
+        st.success("✅ File securely wiped (NIST-style overwrite)")
 
-    success = secure_wipe(file_path)
-    if success:
-        return jsonify({"status": "ok", "msg": "File securely wiped"})
-    return jsonify({"status": "error", "msg": "Unable to wipe file"}), 500
+# ================= CERTIFICATE GENERATOR =================
+st.header("📜 Certificate Generator")
 
-# ========================= Certificate Generator =========================
-@app.route('/certgen', methods=['POST'])
-def certgen():
-    data = request.json
-    common_name = data.get("common_name", "localhost")
+common_name = st.text_input("Common Name (CN)", "example.com")
 
-    # Generate private key
+if st.button("Generate Certificate"):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
-    # Build subject + issuer (self-signed)
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, common_name),
     ])
@@ -59,32 +55,26 @@ def certgen():
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.utcnow())
         .not_valid_after(datetime.utcnow() + timedelta(days=365))
-        .add_extension(
-            x509.BasicConstraints(ca=True, path_length=None),
-            critical=True,
-        )
         .sign(key, hashes.SHA256())
     )
 
-    # Write to temporary files
-    cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
-    key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".key")
-
-    cert_file.write(cert.public_bytes(serialization.Encoding.PEM))
-    key_file.write(key.private_bytes(
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption()
-    ))
+        encryption_algorithm=serialization.NoEncryption(),
+    )
 
-    cert_file.close()
-    key_file.close()
+    st.download_button(
+        "⬇ Download Certificate (.crt)",
+        cert_pem,
+        file_name="certificate.crt"
+    )
 
-    return jsonify({
-        "certificate_path": cert_file.name,
-        "private_key_path": key_file.name
-    })
+    st.download_button(
+        "⬇ Download Private Key (.key)",
+        key_pem,
+        file_name="private.key"
+    )
 
-# ========================= Main =========================
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    st.success("✅ Certificate Generated Successfully")
